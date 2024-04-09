@@ -1,5 +1,8 @@
 use rand::prelude::*;
-use raylib::{ffi::Vector2, prelude::*};
+use raylib::{
+    ffi::{Rectangle, Vector2},
+    prelude::*,
+};
 
 static WIDTH: f32 = 640.;
 static HEIGHT: f32 = 480.;
@@ -135,10 +138,23 @@ fn generate_obstacles(obstacles: &mut Vec<Obstacle>) {
     }
 }
 
+fn reset(obstacles: &mut Vec<Obstacle>, lives: &mut i32, score: &mut i32) {
+    obstacles.clear();
+    generate_obstacles(obstacles);
+    *lives = 3;
+    *score = 0;
+}
+
 fn main() {
     let ground_offset = 100.;
     let mut paddle = Paddle::new(WIDTH / 2., HEIGHT - ground_offset, 100., 10., 12.);
-    let mut ball = Ball::new(WIDTH / 2., HEIGHT - 35., 10., 5., 5.);
+    let mut ball = Ball::new(
+        paddle.pos.x + paddle.size.x / 2.,
+        paddle.pos.y - 2. * 10.,
+        10.,
+        5.,
+        5.,
+    );
     let mut obstacles: Vec<Obstacle> = Vec::new();
 
     generate_obstacles(&mut obstacles);
@@ -154,6 +170,26 @@ fn main() {
         .load_texture(&thread, "assets/brick_img.png")
         .expect("Could not load brick texture");
 
+    let wave_texture = rl
+        .load_texture(&thread, "assets/wave.png")
+        .expect("Could not load wave texture");
+
+    let metal_texture = rl
+        .load_texture(&thread, "assets/metal.png")
+        .expect("Could not load metal texture");
+
+    let wave_frame_height = wave_texture.height() as f32 / 4.;
+
+    let mut wave_frame_count = 0.;
+    let mut wave_current_frame = 0.;
+
+    let mut wave_frame = Rectangle {
+        x: 0.,
+        y: 0.,
+        width: wave_texture.width() as f32,
+        height: wave_frame_height,
+    };
+
     let bg_texture = rl
         .load_texture(&thread, "assets/bg.png")
         .expect("Could not load background texture");
@@ -165,8 +201,8 @@ fn main() {
     let mut frame_rec = Rectangle {
         x: 0.,
         y: 0.,
-        width: WIDTH,
-        height: HEIGHT,
+        width: bg_texture.width() as f32 / 2.,
+        height: bg_texture.height() as f32,
     };
 
     let mut score = 0;
@@ -174,26 +210,97 @@ fn main() {
 
     let mut pause = false;
 
+    let frame_speed = 10.;
+
+    let mut lives = 3;
+    let mut is_game_over = false;
+    let mut has_won = false;
+
     while !rl.window_should_close() {
         let mut d = rl.begin_drawing(&thread);
         d.draw_fps(10, 10);
         d.clear_background(Color::BLANK);
 
-        frame_rec.x += 1.;
+        frame_rec.x += 2. * d.get_frame_time() * 60.;
         frame_rec.x %= bg_texture.width() as f32;
 
-        d.draw_texture_rec(
+        wave_frame_count += 1.;
+
+        if wave_frame_count >= 60. / frame_speed {
+            wave_frame_count = 0.;
+            wave_current_frame += 1.;
+
+            if wave_current_frame > 4. {
+                wave_current_frame = 0.;
+            }
+            wave_frame.y = wave_current_frame * wave_frame_height + 3.;
+        }
+
+        d.draw_texture_pro(
             &bg_texture,
             frame_rec,
+            Rectangle {
+                x: 0.,
+                y: 0.,
+                width: WIDTH,
+                height: HEIGHT,
+            },
             Vector2 { x: 0., y: 0. },
+            0.,
             Color::DARKGRAY,
         );
 
-        d.draw_text(score.to_string().as_str(), 10, 10, 20, Color::WHITE);
-
         if d.is_key_pressed(KeyboardKey::KEY_SPACE) {
+            if has_won {
+                has_won = false;
+                reset(&mut obstacles, &mut lives, &mut score);
+                continue;
+            }
+            if is_game_over {
+                is_game_over = false;
+                reset(&mut obstacles, &mut lives, &mut score);
+                continue;
+            }
             pause = !pause;
         }
+
+        if is_game_over {
+            d.draw_text(
+                "GAME OVER",
+                WIDTH as i32 / 2 - 150,
+                HEIGHT as i32 / 2 - 25,
+                50,
+                Color::WHITE,
+            );
+            continue;
+        }
+
+        if has_won {
+            d.draw_text(
+                "WINNER",
+                WIDTH as i32 / 2 - 80,
+                HEIGHT as i32 / 2 - 40,
+                40,
+                Color::WHITE,
+            );
+            d.draw_text(
+                format!("SCORE: {}", score).as_str(),
+                WIDTH as i32 / 2 - 90,
+                HEIGHT as i32 / 2 + 10,
+                40,
+                Color::WHITE,
+            );
+            continue;
+        }
+
+        d.draw_text(score.to_string().as_str(), 10, 10, 20, Color::WHITE);
+        d.draw_text(
+            format!("Lives: {}", lives).as_str(),
+            (WIDTH - 100.) as i32,
+            10,
+            20,
+            Color::WHITE,
+        );
 
         if d.is_key_down(KeyboardKey::KEY_LEFT) {
             paddle.slide(Direction::Left(d.get_frame_time() * 60.));
@@ -203,7 +310,25 @@ fn main() {
             paddle.slide(Direction::Right(d.get_frame_time() * 60.));
         }
 
-        d.draw_rectangle_v(paddle.pos, paddle.size, Color::WHITE);
+        d.draw_texture_pro(
+            &metal_texture,
+            Rectangle {
+                x: 0.,
+                y: 0.,
+                width: paddle.size.x,
+                height: metal_texture.height() as f32,
+            },
+            Rectangle {
+                x: paddle.pos.x,
+                y: paddle.pos.y,
+                width: paddle.size.x,
+                height: paddle.size.y,
+            },
+            Vector2 { x: 0., y: 0. },
+            0.,
+            Color::WHITE,
+        );
+        // d.draw_rectangle_v(paddle.pos, paddle.size, Color::WHITE);
 
         d.draw_texture_pro(
             &ball_texture,
@@ -237,8 +362,10 @@ fn main() {
             }
         }
 
+        let mut all_hit = true;
         for obs in obstacles.iter() {
             if !obs.hit {
+                all_hit = false;
                 d.draw_texture_pro(
                     &brick_texture,
                     Rectangle {
@@ -255,21 +382,30 @@ fn main() {
                     },
                     Vector2 { x: 0., y: 0. },
                     0.,
-                    Color::from_hex("FF5733").expect("Could not get color from hex"),
+                    Color::from_hex("FFFFFF").expect("Could not get color from hex"),
                 );
-                // d.draw_rectangle_rounded(
-                //     Rectangle {
-                //         x: obs.pos.x,
-                //         y: obs.pos.y,
-                //         width: obs.size.x,
-                //         height: obs.size.y,
-                //     },
-                //     0.3,
-                //     15,
-                //     Color::from_hex("FF5733").expect("Could not get color from hex"),
-                // );
             }
         }
+
+        if all_hit {
+            has_won = true;
+            continue;
+        }
+
+        // wave animated frame
+        d.draw_texture_pro(
+            &wave_texture,
+            wave_frame,
+            Rectangle {
+                x: 0.,
+                y: HEIGHT - ground_offset,
+                width: WIDTH,
+                height: ground_offset,
+            },
+            Vector2 { x: 0., y: 0. },
+            0.,
+            Color::WHITE,
+        );
 
         if ball.collides_with(paddle.pos, paddle.size) {
             ball.velocity.y *= -1.;
@@ -277,6 +413,16 @@ fn main() {
 
         if !pause {
             ball.update(d.get_frame_time() * 60.);
+        }
+
+        if ball.center.y + ball.radius > HEIGHT {
+            lives -= 1;
+            if lives == 0 {
+                is_game_over = true;
+                continue;
+            }
+            ball.center.x = paddle.pos.x + paddle.size.x / 2.;
+            ball.center.y = paddle.pos.y - 2. * ball.radius;
         }
     }
 }
